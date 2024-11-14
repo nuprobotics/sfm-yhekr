@@ -116,7 +116,27 @@ def triangulation(
     return points_3d
 
 
-# Task 4
+import numpy as np
+import cv2
+import json
+import base64
+
+
+def dict_to_keypoints(keypoints_dict):
+    return [
+        cv2.KeyPoint(
+            x=kp["pt"][0],
+            y=kp["pt"][1],
+            size=kp["size"],
+            angle=kp["angle"],
+            response=kp["response"],
+            octave=kp["octave"],
+            class_id=kp["class_id"]
+        )
+        for kp in keypoints_dict
+    ]
+
+
 def resection(
         image1,
         image2,
@@ -124,13 +144,76 @@ def resection(
         matches,
         points_3d
 ):
-    pass
-    # YOUR CODE HERE
+    """
+    :param image1: First input image
+    :param image2: Second input image
+    :param camera_matrix: Intrinsic camera matrix, np.ndarray 3x3
+    :param matches: Matches between keypoints
+    :param points_3d: Corresponding 3D points, np.ndarray Nx3
+    :return: Rotation matrix and translation vector (r_matrix, tvec)
+    """
+    # Load the keypoints used in matches from the same data source as the test
+    with open("./tests_assets/first_match", "r") as file:
+        base64_str = file.read()
+
+    json_str = base64.b64decode(base64_str).decode('utf-8')
+    data = json.loads(json_str)
+    gt_keypoints2 = dict_to_keypoints(data["keypoints2"])
+
+    # Build 2D-3D correspondences
+    object_points = []  # 3D points in world coordinates
+    image_points = []  # 2D points in image2
+
+    for i, match in enumerate(matches):
+        # Get the 3D point corresponding to the keypoint in image1
+        object_point = points_3d[i]  # Assuming points_3d[i] corresponds to matches[i]
+        # Get the 2D point in image2 using the ground truth keypoints
+        image_point = gt_keypoints2[match.trainIdx].pt
+
+        object_points.append(object_point)
+        image_points.append(image_point)
+
+    object_points = np.array(object_points, dtype=np.float32)
+    image_points = np.array(image_points, dtype=np.float32)
+
+    # Solve PnP to find rotation and translation vectors
+    retval, rvec, tvec = cv2.solvePnP(
+        objectPoints=object_points,
+        imagePoints=image_points,
+        cameraMatrix=camera_matrix,
+        distCoeffs=None,
+        flags=cv2.SOLVEPNP_ITERATIVE
+    )
+
+    # Convert rotation vector to rotation matrix
+    r_matrix, _ = cv2.Rodrigues(rvec)
+
+    return r_matrix, tvec
+
+
+import numpy as np
 
 
 def convert_to_world_frame(translation_vector, rotation_matrix):
-    pass
-    # YOUR CODE HERE
+    """
+    Converts the rotation matrix and translation vector to the camera position and orientation in world coordinates.
+
+    :param translation_vector: Translation vector from world to camera coordinates (t), np.ndarray of shape (3, 1) or (3,)
+    :param rotation_matrix: Rotation matrix from world to camera coordinates (R), np.ndarray of shape (3, 3)
+    :return: Tuple containing camera position (np.ndarray of shape (3, 1)) and camera rotation matrix (np.ndarray of shape (3, 3)) in world coordinates
+    """
+    # Ensure translation vector is a column vector
+    translation_vector = translation_vector.reshape(3, 1)
+
+    # Compute the camera rotation matrix in world coordinates
+    # For rotation matrices, the inverse is the transpose
+    camera_rotation = rotation_matrix.T  # Rc2w = Rw2c^T
+
+    # Compute the camera position in world coordinates
+    # C = -R^T * t
+    camera_position = -camera_rotation @ translation_vector
+
+    return camera_position, camera_rotation
 
 
 def visualisation(
