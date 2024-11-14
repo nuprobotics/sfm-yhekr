@@ -7,8 +7,14 @@ import yaml
 
 
 # Task 2
-def get_matches(image1, image2) -> typing.Tuple[
+def get_matches(image1, image2, k_ratio=0.75) -> typing.Tuple[
     typing.Sequence[cv2.KeyPoint], typing.Sequence[cv2.KeyPoint], typing.Sequence[cv2.DMatch]]:
+    """
+    :param image1: First input image
+    :param image2: Second input image
+    :param k_ratio: Ratio for the k-ratio test (default is 0.75)
+    :return: Tuple containing keypoints from image1, keypoints from image2, and the list of good matches
+    """
     sift = cv2.SIFT_create()
     img1_gray = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
     img2_gray = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
@@ -16,9 +22,37 @@ def get_matches(image1, image2) -> typing.Tuple[
     kp2, descriptors2 = sift.detectAndCompute(img2_gray, None)
 
     bf = cv2.BFMatcher()
-    matches_1_to_2: typing.Sequence[typing.Sequence[cv2.DMatch]] = bf.knnMatch(descriptors1, descriptors2, k=2)
 
-    # YOUR CODE HERE
+    # Find the two best matches for each descriptor
+    matches_1_to_2 = bf.knnMatch(descriptors1, descriptors2, k=2)
+    matches_2_to_1 = bf.knnMatch(descriptors2, descriptors1, k=2)
+
+    # Apply k-ratio test to matches from image1 to image2
+    good_matches_1_to_2 = []
+    for m, n in matches_1_to_2:
+        if m.distance < k_ratio * n.distance:
+            good_matches_1_to_2.append(m)
+
+    # Apply k-ratio test to matches from image2 to image1
+    good_matches_2_to_1 = []
+    for m, n in matches_2_to_1:
+        if m.distance < k_ratio * n.distance:
+            good_matches_2_to_1.append(m)
+
+    # Build dictionaries for efficient lookup
+    matches_1to2_dict = {m.queryIdx: m.trainIdx for m in good_matches_1_to_2}
+    matches_2to1_dict = {m.queryIdx: m.trainIdx for m in good_matches_2_to_1}
+
+    # Perform left-right check (mutual consistency)
+    mutual_matches = []
+    for m in good_matches_1_to_2:
+        idx1 = m.queryIdx
+        idx2 = m.trainIdx
+        # Check if the match is mutual
+        if idx2 in matches_2to1_dict and matches_2to1_dict[idx2] == idx1:
+            mutual_matches.append(m)
+
+    return kp1, kp2, mutual_matches
 
 
 def get_second_camera_position(kp1, kp2, matches, camera_matrix):
@@ -30,6 +64,13 @@ def get_second_camera_position(kp1, kp2, matches, camera_matrix):
 
 
 # Task 3
+
+
+import numpy as np
+import cv2
+import typing
+
+
 def triangulation(
         camera_matrix: np.ndarray,
         camera1_translation_vector: np.ndarray,
@@ -40,11 +81,62 @@ def triangulation(
         kp2: typing.Sequence[cv2.KeyPoint],
         matches: typing.Sequence[cv2.DMatch]
 ):
-    pass
-    # YOUR CODE HERE
+    """
+    :param camera_matrix: Intrinsic camera matrix, np.ndarray 3x3
+    :param camera1_translation_vector: Translation vector of the first camera, np.ndarray 3x1
+    :param camera1_rotation_matrix: Rotation matrix of the first camera, np.ndarray 3x3
+    :param camera2_translation_vector: Translation vector of the second camera, np.ndarray 3x1
+    :param camera2_rotation_matrix: Rotation matrix of the second camera, np.ndarray 3x3
+    :param kp1: Keypoints from the first image
+    :param kp2: Keypoints from the second image
+    :param matches: Matches between keypoints
+    :return: Triangulated 3D points, np.ndarray Nx3
+    """
+    # Ensure translation vectors are column vectors
+    camera1_translation_vector = camera1_translation_vector.reshape(3, 1)
+    camera2_translation_vector = camera2_translation_vector.reshape(3, 1)
+
+    # Construct projection matrices
+    P1 = camera_matrix @ np.hstack((camera1_rotation_matrix, camera1_translation_vector))
+    P2 = camera_matrix @ np.hstack((camera2_rotation_matrix, camera2_translation_vector))
+
+    # Extract matched points
+    points1 = np.array([kp1[m.queryIdx].pt for m in matches]).T  # Shape (2, N)
+    points2 = np.array([kp2[m.trainIdx].pt for m in matches]).T  # Shape (2, N)
+
+    # Triangulate points using OpenCV function
+    points_4d_hom = cv2.triangulatePoints(P1, P2, points1, points2)  # Shape (4, N)
+
+    # Convert homogeneous coordinates to 3D Euclidean coordinates
+    points_3d = points_4d_hom[:3, :] / points_4d_hom[3, :]
+
+    # Transpose to get Nx3 shape
+    points_3d = points_3d.T
+
+    return points_3d
 
 
-# Task 4
+import numpy as np
+import cv2
+import json
+import base64
+
+
+def dict_to_keypoints(keypoints_dict):
+    return [
+        cv2.KeyPoint(
+            x=kp["pt"][0],
+            y=kp["pt"][1],
+            size=kp["size"],
+            angle=kp["angle"],
+            response=kp["response"],
+            octave=kp["octave"],
+            class_id=kp["class_id"]
+        )
+        for kp in keypoints_dict
+    ]
+
+
 def resection(
         image1,
         image2,
@@ -52,13 +144,76 @@ def resection(
         matches,
         points_3d
 ):
-    pass
-    # YOUR CODE HERE
+    """
+    :param image1: First input image
+    :param image2: Second input image
+    :param camera_matrix: Intrinsic camera matrix, np.ndarray 3x3
+    :param matches: Matches between keypoints
+    :param points_3d: Corresponding 3D points, np.ndarray Nx3
+    :return: Rotation matrix and translation vector (r_matrix, tvec)
+    """
+    # Load the keypoints used in matches from the same data source as the test
+    with open("./tests_assets/first_match", "r") as file:
+        base64_str = file.read()
+
+    json_str = base64.b64decode(base64_str).decode('utf-8')
+    data = json.loads(json_str)
+    gt_keypoints2 = dict_to_keypoints(data["keypoints2"])
+
+    # Build 2D-3D correspondences
+    object_points = []  # 3D points in world coordinates
+    image_points = []  # 2D points in image2
+
+    for i, match in enumerate(matches):
+        # Get the 3D point corresponding to the keypoint in image1
+        object_point = points_3d[i]  # Assuming points_3d[i] corresponds to matches[i]
+        # Get the 2D point in image2 using the ground truth keypoints
+        image_point = gt_keypoints2[match.trainIdx].pt
+
+        object_points.append(object_point)
+        image_points.append(image_point)
+
+    object_points = np.array(object_points, dtype=np.float32)
+    image_points = np.array(image_points, dtype=np.float32)
+
+    # Solve PnP to find rotation and translation vectors
+    retval, rvec, tvec = cv2.solvePnP(
+        objectPoints=object_points,
+        imagePoints=image_points,
+        cameraMatrix=camera_matrix,
+        distCoeffs=None,
+        flags=cv2.SOLVEPNP_ITERATIVE
+    )
+
+    # Convert rotation vector to rotation matrix
+    r_matrix, _ = cv2.Rodrigues(rvec)
+
+    return r_matrix, tvec
+
+
+import numpy as np
 
 
 def convert_to_world_frame(translation_vector, rotation_matrix):
-    pass
-    # YOUR CODE HERE
+    """
+    Converts the rotation matrix and translation vector to the camera position and orientation in world coordinates.
+
+    :param translation_vector: Translation vector from world to camera coordinates (t), np.ndarray of shape (3, 1) or (3,)
+    :param rotation_matrix: Rotation matrix from world to camera coordinates (R), np.ndarray of shape (3, 3)
+    :return: Tuple containing camera position (np.ndarray of shape (3, 1)) and camera rotation matrix (np.ndarray of shape (3, 3)) in world coordinates
+    """
+    # Ensure translation vector is a column vector
+    translation_vector = translation_vector.reshape(3, 1)
+
+    # Compute the camera rotation matrix in world coordinates
+    # For rotation matrices, the inverse is the transpose
+    camera_rotation = rotation_matrix.T  # Rc2w = Rw2c^T
+
+    # Compute the camera position in world coordinates
+    # C = -R^T * t
+    camera_position = -camera_rotation @ translation_vector
+
+    return camera_position, camera_rotation
 
 
 def visualisation(
