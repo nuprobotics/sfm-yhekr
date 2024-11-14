@@ -7,8 +7,14 @@ import yaml
 
 
 # Task 2
-def get_matches(image1, image2) -> typing.Tuple[
+def get_matches(image1, image2, k_ratio=0.75) -> typing.Tuple[
     typing.Sequence[cv2.KeyPoint], typing.Sequence[cv2.KeyPoint], typing.Sequence[cv2.DMatch]]:
+    """
+    :param image1: First input image
+    :param image2: Second input image
+    :param k_ratio: Ratio for the k-ratio test (default is 0.75)
+    :return: Tuple containing keypoints from image1, keypoints from image2, and the list of good matches
+    """
     sift = cv2.SIFT_create()
     img1_gray = cv2.cvtColor(image1, cv2.COLOR_BGR2GRAY)
     img2_gray = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
@@ -16,9 +22,37 @@ def get_matches(image1, image2) -> typing.Tuple[
     kp2, descriptors2 = sift.detectAndCompute(img2_gray, None)
 
     bf = cv2.BFMatcher()
-    matches_1_to_2: typing.Sequence[typing.Sequence[cv2.DMatch]] = bf.knnMatch(descriptors1, descriptors2, k=2)
 
-    # YOUR CODE HERE
+    # Find the two best matches for each descriptor
+    matches_1_to_2 = bf.knnMatch(descriptors1, descriptors2, k=2)
+    matches_2_to_1 = bf.knnMatch(descriptors2, descriptors1, k=2)
+
+    # Apply k-ratio test to matches from image1 to image2
+    good_matches_1_to_2 = []
+    for m, n in matches_1_to_2:
+        if m.distance < k_ratio * n.distance:
+            good_matches_1_to_2.append(m)
+
+    # Apply k-ratio test to matches from image2 to image1
+    good_matches_2_to_1 = []
+    for m, n in matches_2_to_1:
+        if m.distance < k_ratio * n.distance:
+            good_matches_2_to_1.append(m)
+
+    # Build dictionaries for efficient lookup
+    matches_1to2_dict = {m.queryIdx: m.trainIdx for m in good_matches_1_to_2}
+    matches_2to1_dict = {m.queryIdx: m.trainIdx for m in good_matches_2_to_1}
+
+    # Perform left-right check (mutual consistency)
+    mutual_matches = []
+    for m in good_matches_1_to_2:
+        idx1 = m.queryIdx
+        idx2 = m.trainIdx
+        # Check if the match is mutual
+        if idx2 in matches_2to1_dict and matches_2to1_dict[idx2] == idx1:
+            mutual_matches.append(m)
+
+    return kp1, kp2, mutual_matches
 
 
 def get_second_camera_position(kp1, kp2, matches, camera_matrix):
