@@ -64,6 +64,13 @@ def get_second_camera_position(kp1, kp2, matches, camera_matrix):
 
 
 # Task 3
+
+
+import numpy as np
+import cv2
+import typing
+
+
 def triangulation(
         camera_matrix: np.ndarray,
         camera1_translation_vector: np.ndarray,
@@ -74,8 +81,39 @@ def triangulation(
         kp2: typing.Sequence[cv2.KeyPoint],
         matches: typing.Sequence[cv2.DMatch]
 ):
-    pass
-    # YOUR CODE HERE
+    """
+    :param camera_matrix: Intrinsic camera matrix, np.ndarray 3x3
+    :param camera1_translation_vector: Translation vector of the first camera, np.ndarray 3x1
+    :param camera1_rotation_matrix: Rotation matrix of the first camera, np.ndarray 3x3
+    :param camera2_translation_vector: Translation vector of the second camera, np.ndarray 3x1
+    :param camera2_rotation_matrix: Rotation matrix of the second camera, np.ndarray 3x3
+    :param kp1: Keypoints from the first image
+    :param kp2: Keypoints from the second image
+    :param matches: Matches between keypoints
+    :return: Triangulated 3D points, np.ndarray Nx3
+    """
+    # Ensure translation vectors are column vectors
+    camera1_translation_vector = camera1_translation_vector.reshape(3, 1)
+    camera2_translation_vector = camera2_translation_vector.reshape(3, 1)
+
+    # Construct projection matrices
+    P1 = camera_matrix @ np.hstack((camera1_rotation_matrix, camera1_translation_vector))
+    P2 = camera_matrix @ np.hstack((camera2_rotation_matrix, camera2_translation_vector))
+
+    # Extract matched points
+    points1 = np.array([kp1[m.queryIdx].pt for m in matches]).T  # Shape (2, N)
+    points2 = np.array([kp2[m.trainIdx].pt for m in matches]).T  # Shape (2, N)
+
+    # Triangulate points using OpenCV function
+    points_4d_hom = cv2.triangulatePoints(P1, P2, points1, points2)  # Shape (4, N)
+
+    # Convert homogeneous coordinates to 3D Euclidean coordinates
+    points_3d = points_4d_hom[:3, :] / points_4d_hom[3, :]
+
+    # Transpose to get Nx3 shape
+    points_3d = points_3d.T
+
+    return points_3d
 
 
 # Task 4
